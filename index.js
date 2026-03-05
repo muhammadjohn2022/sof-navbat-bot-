@@ -1,4 +1,4 @@
-const { Telegraf, session } = require('telegraf'); // 'session' qo'shildi
+const { Telegraf, session } = require('telegraf');
 const { createClient } = require('@supabase/supabase-js');
 const http = require('http');
 
@@ -10,12 +10,11 @@ const ADMIN_ID = 270335430;
 const bot = new Telegraf(BOT_TOKEN);
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-// Bot xotirasini yoqamiz (admin xabar yozayotganini bilib turishi uchun)
 bot.use(session());
 
 http.createServer((req, res) => {
   res.writeHead(200, {'Content-Type': 'text/plain'});
-  res.end('SOF Navbat Boti ishlamoqda!\n');
+  res.end('SOF Navbat Boti 24/7 ishlamoqda!\n');
 }).listen(process.env.PORT || 3000);
 
 bot.start((ctx) => {
@@ -31,76 +30,65 @@ bot.start((ctx) => {
       }
     });
   } else {
-    ctx.reply('SOF tizimiga xush kelibsiz!', {
+    ctx.reply('SOF elektron navbat tizimiga xush kelibsiz!', {
       reply_markup: {
         inline_keyboard: [
           [{ text: '🎟 Navbat olish', callback_data: 'get_queue' }],
-          [{ text: '📊 Navbat holati', callback_data: 'current_queue' }]
+          [{ text: '📊 Hozirgi navbat holati', callback_data: 'current_queue' }]
         ]
       }
     });
   }
 });
 
-// Xabar yuborish jarayonini boshlash
-bot.action('start_broadcast', (ctx) => {
-  if (ctx.from.id !== ADMIN_ID) return;
-  ctx.session = { step: 'waiting_for_message' };
-  ctx.reply('📝 Mijozlarga yubormoqchi bo\'lgan matningizni yozing (rasm ham yuborsangiz bo\'ladi):');
-  ctx.answerCbQuery();
-});
-
-// Admin xabar yozganda uni tutib olish va hammaga yuborish
-bot.on(['text', 'photo'], async (ctx) => {
-  if (ctx.from.id === ADMIN_ID && ctx.session?.step === 'waiting_for_message') {
-    ctx.reply('⏳ Xabar yuborilmoqda, kuting...');
-    
-    // 1. Bazadan barcha noyob chat_id'larni olamiz
-    const { data: customers, error } = await supabase
-      .from('navbat')
-      .select('chat_id');
-
-    if (error || !customers) return ctx.reply('Bazadan mijozlarni olishda xatolik.');
-
-    // Faqat takrorlanmas ID'larni olamiz
-    const uniqueIds = [...new Set(customers.map(c => c.chat_id))].filter(id => id);
-
-    let count = 0;
-    for (const id of uniqueIds) {
-      try {
-        if (ctx.message.text) {
-          await bot.telegram.sendMessage(id, ctx.message.text);
-        } else if (ctx.message.photo) {
-          await bot.telegram.sendPhoto(id, ctx.message.photo[0].file_id, { caption: ctx.message.caption });
-        }
-        count++;
-      } catch (e) {
-        console.log(`Xato: ${id} ga yuborib bo'lmadi`);
-      }
-    }
-
-    ctx.session.step = null;
-    ctx.reply(`✅ Xabar ${count} ta mijozga muvaffaqiyatli yuborildi!`);
-  }
-});
-
-// --- Navbat olish va boshqa funksiyalar (o'zgarishsiz qoladi) ---
 bot.action('get_queue', async (ctx) => {
   try {
     const { data } = await supabase.from('navbat').select('number').order('number', { ascending: false }).limit(1);
-    let newNumber = data && data.length > 0 ? data[0].number + 1 : 1;
+    let newNumber = (data && data.length > 0) ? data[0].number + 1 : 1;
     await supabase.from('navbat').insert([{ number: newNumber, status: 'kutmoqda', chat_id: ctx.from.id }]);
-    ctx.reply(`✅ Navbatingiz: ${newNumber}`);
-    ctx.answerCbQuery();
-  } catch (e) { ctx.reply("Xatolik!"); }
-});
-
-bot.action('call_next', async (ctx) => {
-    // Avvalgi call_next kodi...
+    await ctx.reply(`✅ Siz muvaffaqiyatli ro'yxatdan o'tdingiz!\nSizning navbatingiz: <b>${newNumber}</b>`, { parse_mode: 'HTML' });
+    await ctx.answerCbQuery();
+  } catch (err) { ctx.reply("Xatolik yuz berdi."); }
 });
 
 bot.action('current_queue', async (ctx) => {
-    // Avvalgi current_queue kodi...
+  try {
+    const { data: called } = await supabase.from('navbat').select('number').eq('status', 'chaqirildi').order('number', { ascending: false }).limit(1);
+    const { count } = await supabase.from('navbat').select('*', { count: 'exact', head: true }).eq('status', 'kutmoqda');
+    let current = called && called.length > 0 ? called[0].number : 0;
+    await ctx.reply(`📊 <b>Holat:</b>\n👉 Hozir ichkarida: ${current}\n👥 Kutayotganlar: ${count || 0}`, { parse_mode: 'HTML' });
+    await ctx.answerCbQuery();
+  } catch (err) { ctx.reply("Ma'lumot topilmadi."); }
 });
 
-bot.launch().then(() => console.log('Bot xabar yuborish tizimi bilan ishga tushdi!'));
+bot.action('call_next', async (ctx) => {
+  try {
+    const { data } = await supabase.from('navbat').select('*').eq('status', 'kutmoqda').order('number', { ascending: true }).limit(1);
+    if (!data || data.length === 0) return ctx.answerCbQuery("Navbatda hech kim yo'q.");
+    const next = data[0];
+    await supabase.from('navbat').update({ status: 'chaqirildi' }).eq('id', next.id);
+    await bot.telegram.sendMessage(next.chat_id, `🔔 Navbatingiz keldi: <b>${next.number}</b>`, { parse_mode: 'HTML' });
+    await ctx.reply(`✅ ${next.number}-mijoz chaqirildi.`);
+    await ctx.answerCbQuery();
+  } catch (err) { ctx.reply("Chaqirishda xato."); }
+});
+
+bot.action('start_broadcast', (ctx) => {
+  ctx.session = { step: 'waiting_msg' };
+  ctx.reply('📝 Hammaga yubormoqchi bo\'lgan xabarni yozing:');
+  ctx.answerCbQuery();
+});
+
+bot.on('text', async (ctx) => {
+  if (ctx.from.id === ADMIN_ID && ctx.session?.step === 'waiting_msg') {
+    const { data } = await supabase.from('navbat').select('chat_id');
+    const ids = [...new Set(data.map(c => c.chat_id))];
+    for (const id of ids) {
+      try { await bot.telegram.sendMessage(id, ctx.message.text); } catch (e) {}
+    }
+    ctx.session.step = null;
+    ctx.reply('✅ Xabar yuborildi.');
+  }
+});
+
+bot.launch().then(() => console.log('Bot yangilandi!'));
