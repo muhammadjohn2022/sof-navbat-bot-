@@ -199,5 +199,31 @@ bot.on('text', async (ctx) => {
     }
   }
 });
+// --- SUPERADMIN STATISTIKASI ---
+bot.action('super_stats', async (ctx) => {
+  if (ctx.from.id !== SUPERADMIN_ID) return ctx.answerCbQuery();
+
+  try {
+    // Bazadan ma'lumotlarni sanab olish
+    const { count: bizCount } = await supabase.from('businesses').select('*', { count: 'exact', head: true });
+    const { count: customerCount } = await supabase.from('customers').select('*', { count: 'exact', head: true });
+    
+    // Bugun olingan barcha navbatlar
+    const startOfDay = getStartOfTodayUZT();
+    const { count: queuesToday } = await supabase.from('queues').select('*', { count: 'exact', head: true }).gte('created_at', startOfDay);
+
+    const statsText = 
+      `📊 <b>PLATFORMA STATISTIKASI:</b>\n\n` +
+      `🏢 Ulanishlar (Tadbirkorlar): <b>${bizCount || 0} ta</b>\n` +
+      `👥 Barcha mijozlar bazasi: <b>${customerCount || 0} ta</b>\n` +
+      `🎟 Bugun olingan navbatlar: <b>${queuesToday || 0} ta</b>\n\n` +
+      `<i>O'sishda davom eting! 🚀</i>`;
+
+    await ctx.reply(statsText, { parse_mode: 'HTML' });
+    await ctx.answerCbQuery();
+  } catch (err) {
+    ctx.answerCbQuery("Xatolik yuz berdi.", { show_alert: true });
+  }
+});
 
 bot.launch().then(() => console.log('Yashin tezligidagi SaaS ishga tushdi!'));
