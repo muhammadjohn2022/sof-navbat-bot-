@@ -17,12 +17,12 @@ http.createServer((req, res) => {
   res.end('SmartNavbat SaaS is running!\n');
 }).listen(process.env.PORT || 3000);
 
-// O'zbekiston vaqti bilan "Bugun"ning boshlanishini topuvchi yordamchi funksiya
+// Bugungi sanani hisoblash
 function getStartOfTodayUZT() {
   const now = new Date();
   const uzbTime = new Date(now.toLocaleString("en-US", {timeZone: "Asia/Tashkent"}));
-  uzbTime.setHours(0, 0, 0, 0); // Soat 00:00 qilinadi
-  return new Date(uzbTime.getTime() - (5 * 60 * 60 * 1000)).toISOString(); // Supabase uchun UTC ga qaytariladi
+  uzbTime.setHours(0, 0, 0, 0); 
+  return new Date(uzbTime.getTime() - (5 * 60 * 60 * 1000)).toISOString(); 
 }
 
 bot.start(async (ctx) => {
@@ -30,13 +30,14 @@ bot.start(async (ctx) => {
   const userId = ctx.from.id;
   const payload = ctx.startPayload; 
 
+  // SUPERADMIN MENYUSI
   if (userId === SUPERADMIN_ID && !payload) {
     return ctx.reply('👑 Superadmin paneliga xush kelibsiz!', Markup.inlineKeyboard([
-      [Markup.button.callback('➕ Yangi biznes qo\'shish', 'add_business')],
-      [Markup.button.callback('📊 Umumiy statistika', 'super_stats')]
+      [Markup.button.callback('➕ Yangi biznes qo\'shish', 'add_business')]
     ]));
   }
 
+  // TADBIRKOR MENYUSI
   const { data: businessAdmin } = await supabase.from('businesses').select('*').eq('admin_id', userId).single();
   if (businessAdmin && !payload) {
     ctx.session.admin_biz_id = businessAdmin.id;
@@ -47,20 +48,22 @@ bot.start(async (ctx) => {
     ]));
   }
 
+  // XARIDOR LINK ORQALI KIRMASA XATO BERISH
   if (!payload) return ctx.reply("Iltimos, do'kon taqdim etgan maxsus QR-kod yoki havola orqali kiring.");
 
   const { data: business } = await supabase.from('businesses').select('*').eq('slug', payload).single();
   if (!business || !business.is_active) return ctx.reply("Kechirasiz, ushbu xizmat hozircha faol emas.");
 
+  // Mantiq o'zgardi: Odam kirmagan bo'lsa, uni avtomatik bazaga yozamiz
   const { data: customer } = await supabase.from('customers').select('*').eq('chat_id', userId).single();
-
+  
   if (!customer) {
-    ctx.session.step = 'register_name';
-    ctx.session.register_biz_id = business.id;
-    ctx.session.register_biz_name = business.name;
-    return ctx.reply(`👋 ${business.name} tizimiga xush kelibsiz!\n\nIltimos, ism-familiyangizni yozib yuboring:`);
+    // Mijozning Telegramdagi ismini o'zini so'ramasdan tortib olamiz
+    const userName = ctx.from.first_name || "Mijoz";
+    await supabase.from('customers').insert([{ chat_id: userId, full_name: userName, phone: 'Telegram' }]);
   }
 
+  // Darhol menyuni beramiz (Ism va raqam so'rash olib tashlandi!)
   ctx.session.current_biz_id = business.id;
   ctx.session.current_biz_name = business.name;
   ctx.reply(`🏢 Siz ${business.name} navbat tizimidasiz. Marhamat:`, Markup.inlineKeyboard([
@@ -69,14 +72,16 @@ bot.start(async (ctx) => {
   ]));
 });
 
-// --- SUPERADMIN FUNKSIYALARI ---
+
+// --- SUPERADMIN ---
 bot.action('add_business', (ctx) => {
   ctx.session.step = 'add_biz_admin_id';
   ctx.reply("Yangi mijoz (Tadbirkor)ning Telegram ID raqamini yozing:");
   ctx.answerCbQuery();
 });
 
-// --- TADBIRKOR FUNKSIYALARI ---
+
+// --- TADBIRKOR ---
 bot.action('get_leads', async (ctx) => {
   const bizId = ctx.session.admin_biz_id;
   const { data: queues } = await supabase.from('queues').select('chat_id').eq('business_id', bizId);
@@ -85,15 +90,15 @@ bot.action('get_leads', async (ctx) => {
   const uniqueIds = [...new Set(queues.map(q => q.chat_id))];
   const { data: customers } = await supabase.from('customers').select('*').in('chat_id', uniqueIds);
   
-  let list = "📂 <b>Mijozlaringiz ro'yxati:</b>\n\n";
-  customers.forEach((c, i) => { list += `${i+1}. ${c.full_name} | ${c.phone}\n`; });
+  let list = "📂 <b>Mijozlaringiz ro'yxati (Telegram Ismlari):</b>\n\n";
+  customers.forEach((c, i) => { list += `${i+1}. ${c.full_name}\n`; });
   ctx.reply(list, { parse_mode: 'HTML' });
   ctx.answerCbQuery();
 });
 
 bot.action('call_next', async (ctx) => {
   const bizId = ctx.session.admin_biz_id;
-  const startOfDay = getStartOfTodayUZT(); // Faqat bugungi navbatlarni chaqiramiz
+  const startOfDay = getStartOfTodayUZT(); 
 
   const { data } = await supabase.from('queues').select('*')
     .eq('business_id', bizId).eq('status', 'kutmoqda').gte('created_at', startOfDay)
@@ -108,15 +113,21 @@ bot.action('call_next', async (ctx) => {
   ctx.answerCbQuery();
 });
 
-// --- XARIDOR FUNKSIYALARI ---
+// Xabar yuborish (Rassilka) funksiyasi
+bot.action('start_broadcast', (ctx) => {
+  ctx.session = { step: 'waiting_msg', admin_biz_id: ctx.session.admin_biz_id };
+  ctx.reply('📝 Mijozlaringizga yubormoqchi bo\'lgan xabaringizni yozing:');
+  ctx.answerCbQuery();
+});
+
+
+// --- XARIDOR ---
 bot.action('get_queue', async (ctx) => {
   const bizId = ctx.session?.current_biz_id;
   const bizName = ctx.session?.current_biz_name;
   if(!bizId) return ctx.reply("Iltimos, botni qayta ishga tushiring (/start).");
 
-  const startOfDay = getStartOfTodayUZT(); // Bugungi sanani hisoblash
-
-  // Faqat bugungi sanada olingan navbatlarning eng kattasini qidiramiz
+  const startOfDay = getStartOfTodayUZT(); 
   const { data } = await supabase.from('queues').select('number')
     .eq('business_id', bizId).gte('created_at', startOfDay)
     .order('number', { ascending: false }).limit(1);
@@ -140,38 +151,35 @@ bot.action('current_queue', async (ctx) => {
     .eq('business_id', bizId).eq('status', 'kutmoqda').gte('created_at', startOfDay);
   
   let current = called && called.length > 0 ? called[0].number : 0;
-  ctx.reply(`📊 <b>Joriy holat (Bugun):</b>\n👉 Hozir ichkarida: ${current}\n👥 Kutayotganlar: ${count || 0}`, { parse_mode: 'HTML' });
+  ctx.reply(`📊 <b>Joriy holat:</b>\n👉 Hozir ichkarida: ${current}\n👥 Kutayotganlar: ${count || 0}`, { parse_mode: 'HTML' });
   ctx.answerCbQuery();
 });
+
 
 // --- MATNLARNI QABUL QILISH ---
 bot.on('text', async (ctx) => {
   const text = ctx.message.text;
   const step = ctx.session?.step;
 
-  if (step === 'register_name') {
-    ctx.session.reg_name = text;
-    ctx.session.step = 'register_phone';
-    return ctx.reply("Yaxshi! Endi telefon raqamingizni yozib yuboring (masalan: +998901234567):");
-  }
-
-  if (step === 'register_phone') {
-    await supabase.from('customers').insert([{ chat_id: ctx.from.id, full_name: ctx.session.reg_name, phone: text }]);
-    const bizId = ctx.session.register_biz_id;
-    const bizName = ctx.session.register_biz_name;
+  // Tadbirkor xabar (reklama) yozganda
+  if (step === 'waiting_msg' && ctx.session.admin_biz_id) {
+    const bizId = ctx.session.admin_biz_id;
+    const { data: queues } = await supabase.from('queues').select('chat_id').eq('business_id', bizId);
+    if (!queues || queues.length === 0) return ctx.reply("Hali mijozlar yo'q.");
     
+    const uniqueIds = [...new Set(queues.map(q => q.chat_id))];
+    let sentCount = 0;
+    for (const id of uniqueIds) {
+      try {
+        await bot.telegram.sendMessage(id, text);
+        sentCount++;
+      } catch (e) {} // Bloklagan mijozlar uchun xato bermasligi uchun
+    }
     ctx.session.step = null;
-    ctx.session.current_biz_id = bizId;
-    ctx.session.current_biz_name = bizName;
-    
-    return ctx.reply(`🎉 Tabriklaymiz, ro'yxatdan o'tdingiz!\nMarhamat, ${bizName} navbatini oling:`,
-      Markup.inlineKeyboard([
-        [Markup.button.callback('🎟 Navbat olish', 'get_queue')],
-        [Markup.button.callback('📊 Hozirgi navbat', 'current_queue')]
-      ])
-    );
+    return ctx.reply(`✅ Xabar ${sentCount} ta mijozga yetkazildi!`);
   }
 
+  // Superadmin biznes qo'shayotganda
   if (ctx.from.id === SUPERADMIN_ID) {
     if (step === 'add_biz_admin_id') {
       ctx.session.new_biz = { admin_id: parseInt(text) };
@@ -192,4 +200,4 @@ bot.on('text', async (ctx) => {
   }
 });
 
-bot.launch().then(() => console.log('B2B SaaS kunlik yangilanish bilan ishga tushdi!'));
+bot.launch().then(() => console.log('Yashin tezligidagi SaaS ishga tushdi!'));
